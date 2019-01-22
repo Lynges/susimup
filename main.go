@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/faiface/beep"
 	"github.com/faiface/beep/mp3"
 	"github.com/faiface/beep/speaker"
 	ui "github.com/gizak/termui"
@@ -16,73 +17,110 @@ const styleMarked = "(fg-black,bg-green)"
 const stylePlaying = "(fg-white,bg-green)"
 const styleNormal = "(fg-green,bg-black)"
 
-type soundfile struct {
+type menuEntry struct {
 	File      os.FileInfo
 	path      string
 	IsPlaying bool
 }
 
-func (sf *soundfile) represent() string {
-	if sf.IsPlaying {
-		return sf.File.Name() + stylePlaying
+func (sf *menuEntry) represent() string {
+	var prefix string
+	if sf.File.IsDir() {
+		prefix = "-> "
+	} else {
+		prefix = "   "
 	}
-	return sf.File.Name()
+	return prefix + sf.File.Name()
 }
 
-func (sf *soundfile) play() {
-	// Open first sample File
-	f, err := os.Open(sf.path)
+func (sf *menuEntry) stopPlaying() {
+	sf.IsPlaying = false
+}
 
-	// Check for errors when opening the file
+func (sf *menuEntry) play(playControl <-chan string) {
+
+	f, err := os.Open(sf.path + "/" + sf.File.Name())
+
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Decode the .mp3 File, if you have a .wav file, use wav.Decode(f)
-	s, format, _ := mp3.Decode(f)
+	stream, format, _ := mp3.Decode(f)
+
+	ctrl := &beep.Ctrl{Streamer: beep.Loop(-1, stream)}
 
 	// Init the Speaker with the SampleRate of the format and a buffer size of 1/10s
 	speaker.Clear()
 	speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
 
-	speaker.Play(s)
-	// // Channel, which will signal the end of the playback.
-	// playing := make(chan struct{})
+	// Internal channel, which will signal the end of the playback.
+	internalPlay := make(chan struct{})
 
-	// // Now we Play our Streamer on the Speaker
-	// speaker.Play(beep.Seq(s, beep.Callback(func() {
-	// 	// Callback after the stream Ends
-	// 	close(playing)
-	// })))
-	// <-playing
+	speaker.Play(beep.Seq(ctrl, beep.Callback(func() {
+		close(internalPlay)
+	})))
+
+	sf.IsPlaying = true
+	defer sf.stopPlaying()
+loop:
+	for {
+		select {
+		case <-internalPlay:
+			break loop
+			// internalPlay := make(chan struct{})
+
+			// speaker.Play(beep.Seq(ctrl, beep.Callback(func() {
+			// 	close(internalPlay)
+			// })))
+
+		case stm := <-playControl:
+			switch stm {
+			case "pause":
+				speaker.Lock()
+				if ctrl.Paused {
+					ctrl.Paused = false
+				} else {
+					log.Print(ctrl.Streamer.Err())
+					ctrl.Paused = true
+				}
+				speaker.Unlock()
+			case "stop":
+				break loop
+			}
+		case <-playControl:
+			break loop
+		}
+	}
 }
 
-func getFolderContent(path string) []soundfile {
+func getFolderContent(path string) []menuEntry {
 	rawfiles, err := ioutil.ReadDir(path)
 	if err != nil {
 		log.Fatal(err)
 	}
-	files := []soundfile{}
+	files := []menuEntry{}
 	for _, rf := range rawfiles {
 		if !strings.HasPrefix(rf.Name(), ".") && (strings.HasSuffix(rf.Name(), ".mp3") || rf.IsDir()) {
-			files = append(files, soundfile{rf, path, false})
+			files = append(files, menuEntry{rf, path, false})
 		}
 	}
 	return files
 }
 
-func updateList(ls *ui.List, soundfiles []soundfile, marker int) {
+func updateList(ls *ui.List, entries []menuEntry, marker int) {
 	items := []string{}
-	for index := 0; index < len(soundfiles); index++ {
-		representation := soundfiles[index].represent()
+	for index := 0; index < len(entries); index++ {
+		representation := entries[index].represent()
 		if marker == index {
 			representation = "[" + representation + "]" + styleMarked
+		} else if entries[index].IsPlaying {
+			representation = "[" + representation + "]" + stylePlaying
 		}
 		items = append(items, representation)
 	}
 	ls.Items = items
 
-	ls.Height = len(ls.Items) + 2 // to make up list including its own size in this number
+	ls.Height = len(ls.Items) + 2 // to make up for list including its own size in this number
 }
 
 func generatePosition(currentpos int, modifier int, listsize int) int {
@@ -98,12 +136,39 @@ func generatePosition(currentpos int, modifier int, listsize int) int {
 	return currentpos + modifier
 }
 
+func getNextPlayable(direction int, entries []menuEntry) int {
+	position := -1
+	for sfi := 0; sfi < len(entries); sfi++ {
+		if entries[sfi].IsPlaying {
+			position = sfi
+		}
+	}
+	if position == -1 {
+		direction = 1
+	}
+	for index := position + direction; index > -1 && index < len(entries); index = index + direction {
+		if !entries[index].File.IsDir() {
+			return index
+		}
+	}
+	return position
+}
+
 func main() {
 	err := ui.Init()
 	if err != nil {
 		panic(err)
 	}
 	defer ui.Close()
+
+	file, err := os.OpenFile("info.log", os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer file.Close()
+
+	log.SetOutput(file)
 
 	// strs := []string{
 	// 	"[0] github.com/gizak/termui",
@@ -115,12 +180,16 @@ func main() {
 	// 	"[6] dashboard.go",
 	// 	"[7] nsf/termbox-go"}
 
-	basepath := "/home/lynge/ildhesten-music-controller/showsound"
+	basepath := "testmusic"
 	path := []string{}
 	path = append(path, basepath)
 
 	sfiles := getFolderContent(basepath)
 
+	// start channel for player control
+	playControl := make(chan string)
+	playThis := -1
+	// configure ui
 	ls := ui.NewList()
 	ls.BorderLabel = strings.Join(path, "/")
 	ls.ItemFgColor = ui.ColorGreen
@@ -143,7 +212,7 @@ func main() {
 	for {
 		e := <-uiEvents
 		switch e.ID {
-		case "q", "<C-c>", "f":
+		case "q", "<C-c>":
 			return
 		case "<Up>":
 			barpos = generatePosition(barpos, -1, len(ls.Items))
@@ -157,7 +226,7 @@ func main() {
 				sfiles = getFolderContent(strings.Join(path, "/"))
 				barpos = 0
 			} else {
-				sfiles[barpos].play()
+				playThis = barpos
 			}
 		case "<Backspace>", "C-8>":
 			if len(path) > 1 {
@@ -165,8 +234,14 @@ func main() {
 				sfiles = getFolderContent(strings.Join(path, "/"))
 				barpos = 0
 			}
+		case "<Space>":
+			playControl <- "pause"
 		}
-
+		if playThis >= 0 {
+			playControl = make(chan string)
+			go sfiles[playThis].play(playControl)
+			playThis = -1
+		}
 		updateList(ls, sfiles, barpos)
 		// ls.BorderLabel = e.ID
 		ls.BorderLabel = strings.Join(path, "/")
