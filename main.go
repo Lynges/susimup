@@ -22,10 +22,11 @@ const stylePlaying = "(fg-white,bg-green)"
 const styleNormal = "(fg-green,bg-black)"
 const labelEnd = "  -  Press backspace to go up a folder level"
 
+var currentlyPlaying string
+
 type menuEntry struct {
 	File       os.FileInfo
 	path       string
-	IsPlaying  bool
 	shouldLoop bool
 }
 
@@ -40,10 +41,12 @@ func (sf *menuEntry) represent() string {
 }
 
 func (sf *menuEntry) stopPlaying() {
-	sf.IsPlaying = false
+	currentlyPlaying = ""
 }
 
 func (sf *menuEntry) play(playControl <-chan string, playReturn chan<- string) {
+	currentlyPlaying = sf.File.Name()
+
 	f, err := os.Open(filepath.Join(sf.path, sf.File.Name()))
 	if err != nil {
 		log.Fatal(err)
@@ -71,8 +74,6 @@ func (sf *menuEntry) play(playControl <-chan string, playReturn chan<- string) {
 	}
 	speaker.Play(beep.Seq(ctrl, secondstream))
 
-	sf.IsPlaying = true
-	defer sf.stopPlaying()
 loop:
 	for {
 		select {
@@ -114,17 +115,17 @@ func getFolderContent(path string) []menuEntry {
 		if !strings.HasPrefix(rf.Name(), ".") {
 			switch {
 			case rf.IsDir():
-				directories = append(directories, menuEntry{rf, path, false, false})
+				directories = append(directories, menuEntry{rf, path, false})
 			case strings.HasSuffix(rf.Name(), ".mp3"):
 				shouldLoop := false
 				if strings.HasSuffix(rf.Name(), "_loop.mp3") {
 					shouldLoop = true
 				}
-				files = append(files, menuEntry{rf, path, false, shouldLoop})
+				files = append(files, menuEntry{rf, path, shouldLoop})
 			}
 		}
 	}
-	log.Println(directories)
+
 	sort.Slice(directories, func(i, j int) bool {
 		return strings.ToLower(directories[i].File.Name()) < strings.ToLower(directories[j].File.Name())
 	})
@@ -136,12 +137,14 @@ func getFolderContent(path string) []menuEntry {
 }
 
 func updateList(ls *ui.List, entries []menuEntry, marker int) {
+	log.Println("updating list")
 	items := []string{}
 	for index := 0; index < len(entries); index++ {
 		representation := entries[index].represent()
 		if marker == index {
 			representation = "[" + representation + "]" + styleMarked
-		} else if entries[index].IsPlaying {
+		} else if entries[index].File.Name() == currentlyPlaying {
+			log.Println(representation)
 			representation = "[" + representation + "]" + stylePlaying
 		}
 		items = append(items, representation)
@@ -167,7 +170,7 @@ func generatePosition(currentpos int, modifier int, listsize int) int {
 func getNextPlayable(direction int, entries []menuEntry) int {
 	position := -1
 	for sfi := 0; sfi < len(entries); sfi++ {
-		if entries[sfi].IsPlaying {
+		if entries[sfi].File.Name() == currentlyPlaying {
 			position = sfi
 		}
 	}
@@ -262,6 +265,10 @@ func main() {
 			} else {
 				playThis = barpos
 			}
+		case "h":
+			playThis = getNextPlayable(-1, sfiles)
+		case "j":
+			playThis = getNextPlayable(1, sfiles)
 		case "<Backspace>", "C-8>":
 			if len(pathelements) > 1 {
 				pathelements = pathelements[:len(pathelements)-1]
@@ -278,6 +285,7 @@ func main() {
 			log.Println("received player_stopped")
 			// empty here to we fall out the bottom and update the list to remove the playerbar
 		}
+
 		if playThis >= 0 || playThis == -2 {
 			select {
 			case playControl <- "stop":
