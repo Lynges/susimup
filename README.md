@@ -10,7 +10,7 @@ For now you must build the project yourself.
 This project depends on [beep](https://github.com/faiface/beep/) and in turn [oto](https://github.com/hajimehoshi/oto) that requires an alsa library.
 
 To install the lib on ubuntu do:
-```console
+```
 sudo apt install libasound2-dev
 ```
 For other distros take a look at the list of package names here: http://rosindex.github.io/d/libasound2-dev/
@@ -18,7 +18,7 @@ For other distros take a look at the list of package names here: http://rosindex
 ### Building
 
  Build the music player:
-```console
+```
 go get github.com/Lynges/susimup
 cd $GOPATH/src/github.com/susimup
 go build main.go
