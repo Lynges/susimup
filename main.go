@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +20,7 @@ import (
 const styleMarked = "(fg-black,bg-green)"
 const stylePlaying = "(fg-white,bg-green)"
 const styleNormal = "(fg-green,bg-black)"
+const labelEnd = "  -  Press backspace to go up a folder level"
 
 type menuEntry struct {
 	File       os.FileInfo
@@ -41,7 +44,7 @@ func (sf *menuEntry) stopPlaying() {
 }
 
 func (sf *menuEntry) play(playControl <-chan string, playReturn chan<- string) {
-	f, err := os.Open(sf.path + "/" + sf.File.Name())
+	f, err := os.Open(filepath.Join(sf.path, sf.File.Name()))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -54,7 +57,6 @@ func (sf *menuEntry) play(playControl <-chan string, playReturn chan<- string) {
 
 	stream, format, _ := mp3.Decode(f)
 	ctrl := &beep.Ctrl{Streamer: beep.Loop(loopcount, stream)}
-	ctrl.Paused = false // TODO: test of this really needs to be here
 
 	speaker.Clear()
 	speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10)) // speaker samplerate of second/10 is from example code.
@@ -103,6 +105,7 @@ loop:
 func getFolderContent(path string) []menuEntry {
 	rawfiles, err := ioutil.ReadDir(path)
 	if err != nil {
+		fmt.Println(err)
 		log.Fatal(err)
 	}
 	files := []menuEntry{}
@@ -191,20 +194,33 @@ func channelCombiner(uichan <-chan termui.Event, playchan <-chan string, returnc
 }
 
 func main() {
-	err := ui.Init()
+	var basepath string
+	var err error
+	if len(os.Args) > 1 {
+		basepath, err = filepath.Abs(os.Args[1])
+		if err != nil {
+			log.Println(os.Args[1] + " caused: " + err.Error() + "\n Using cwd as basepath.")
+		}
+	} else {
+		basepath, err = os.Getwd()
+		if err != nil {
+			fmt.Println(err)
+			log.Fatal(err)
+		}
+	}
+	pathelements := []string{}
+	pathelements = append(pathelements, basepath)
+
+	sfiles := getFolderContent(basepath)
+
+	err = ui.Init()
 	if err != nil {
 		panic(err)
 	}
 	defer ui.Close()
-	// TODO: some better selection for musicdir
-	basepath := "testmusic"
-	path := []string{}
-	path = append(path, basepath)
-
-	sfiles := getFolderContent(basepath)
 
 	ls := ui.NewList()
-	ls.BorderLabel = strings.Join(path, "/")
+	ls.BorderLabel = strings.Join(pathelements, "/") + labelEnd
 	ls.ItemFgColor = ui.ColorGreen
 	barpos := 0
 
@@ -213,7 +229,6 @@ func main() {
 	ui.Body.AddRows(
 		ui.NewRow(
 			ui.NewCol(10, 0, ls)),
-		//ui.NewCol(2, 0, widget1)),
 	)
 	ui.Body.Align()
 	ui.Render(ls)
@@ -240,17 +255,17 @@ func main() {
 			barpos = generatePosition(barpos, 1, len(ls.Items))
 		case "<Enter>":
 			if sfiles[barpos].File.IsDir() {
-				path = append(path, sfiles[barpos].File.Name())
-				sfiles = getFolderContent(strings.Join(path, "/"))
+				pathelements = append(pathelements, sfiles[barpos].File.Name())
+				sfiles = getFolderContent(filepath.Join(pathelements...))
 				barpos = 0
 				playThis = -2
 			} else {
 				playThis = barpos
 			}
 		case "<Backspace>", "C-8>":
-			if len(path) > 1 {
-				path = path[:len(path)-1]
-				sfiles = getFolderContent(strings.Join(path, "/"))
+			if len(pathelements) > 1 {
+				pathelements = pathelements[:len(pathelements)-1]
+				sfiles = getFolderContent(strings.Join(pathelements, "/"))
 				barpos = 0
 			}
 		case "<Space>":
@@ -275,7 +290,7 @@ func main() {
 			playThis = -1
 		}
 		updateList(ls, sfiles, barpos)
-		ls.BorderLabel = strings.Join(path, "/")
+		ls.BorderLabel = strings.Join(pathelements, "/") + labelEnd
 		ui.Clear()
 		ui.Render(ls)
 	}
