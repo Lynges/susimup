@@ -20,9 +20,10 @@ const stylePlaying = "(fg-white,bg-green)"
 const styleNormal = "(fg-green,bg-black)"
 
 type menuEntry struct {
-	File      os.FileInfo
-	path      string
-	IsPlaying bool
+	File       os.FileInfo
+	path       string
+	IsPlaying  bool
+	shouldLoop bool
 }
 
 func (sf *menuEntry) represent() string {
@@ -40,27 +41,33 @@ func (sf *menuEntry) stopPlaying() {
 }
 
 func (sf *menuEntry) play(playControl <-chan string, playReturn chan<- string) {
-
 	f, err := os.Open(sf.path + "/" + sf.File.Name())
-
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	stream, format, _ := mp3.Decode(f)
+	loopcount := 1
 
-	ctrl := &beep.Ctrl{Streamer: beep.Loop(-1, stream)}
-	ctrl.Paused = false
+	if sf.shouldLoop {
+		loopcount = -1
+	}
+
+	stream, format, _ := mp3.Decode(f)
+	ctrl := &beep.Ctrl{Streamer: beep.Loop(loopcount, stream)}
+	ctrl.Paused = false // TODO: test of this really needs to be here
 
 	speaker.Clear()
 	speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10)) // speaker samplerate of second/10 is from example code.
 
 	// Internal channel, which will signal the end of the playback.
 	internalPlay := make(chan struct{})
-
-	speaker.Play(beep.Seq(ctrl, beep.Callback(func() {
-		close(internalPlay)
-	})))
+	var secondstream beep.Streamer
+	if sf.shouldLoop {
+		secondstream = beep.Callback(func() { close(internalPlay) })
+	} else {
+		secondstream = beep.Silence(-1)
+	}
+	speaker.Play(beep.Seq(ctrl, secondstream))
 
 	sf.IsPlaying = true
 	defer sf.stopPlaying()
@@ -81,6 +88,7 @@ loop:
 				}
 				speaker.Unlock()
 			case "stop":
+				speaker.Clear()
 				log.Print("stop for " + sf.File.Name())
 				break loop
 			}
@@ -103,9 +111,13 @@ func getFolderContent(path string) []menuEntry {
 		if !strings.HasPrefix(rf.Name(), ".") {
 			switch {
 			case rf.IsDir():
-				directories = append(directories, menuEntry{rf, path, false})
+				directories = append(directories, menuEntry{rf, path, false, false})
 			case strings.HasSuffix(rf.Name(), ".mp3"):
-				files = append(files, menuEntry{rf, path, false})
+				shouldLoop := false
+				if strings.HasSuffix(rf.Name(), "_loop.mp3") {
+					shouldLoop = true
+				}
+				files = append(files, menuEntry{rf, path, false, shouldLoop})
 			}
 		}
 	}
@@ -216,7 +228,7 @@ func main() {
 	coms := make(chan string)
 	go channelCombiner(uiEvents, playReturn, coms)
 
-	playThis := -1
+	playThis := -1 // -1 is "do nothing, but update" -2 is "stop playing" and 0+ is "play this track in the current folder"
 	for {
 		com := <-coms
 		switch com {
@@ -224,15 +236,14 @@ func main() {
 			return
 		case "<Up>":
 			barpos = generatePosition(barpos, -1, len(ls.Items))
-
 		case "<Down>":
 			barpos = generatePosition(barpos, 1, len(ls.Items))
-
 		case "<Enter>":
 			if sfiles[barpos].File.IsDir() {
 				path = append(path, sfiles[barpos].File.Name())
 				sfiles = getFolderContent(strings.Join(path, "/"))
 				barpos = 0
+				playThis = -2
 			} else {
 				playThis = barpos
 			}
@@ -249,15 +260,17 @@ func main() {
 				// we do this to prevent blocking if space is pressed without a track is playing
 			}
 		case "player_stopped":
-			// empty here to we fall through and update the list to remove the playerbar
-
+			log.Println("received player_stopped")
+			// empty here to we fall out the bottom and update the list to remove the playerbar
 		}
-		if playThis >= 0 {
+		if playThis >= 0 || playThis == -2 {
 			select {
 			case playControl <- "stop":
 			default:
 				// we send a non-blocking stop to prevent any lingering goroutines from causing trouble.
 			}
+		}
+		if playThis >= 0 {
 			go sfiles[playThis].play(playControl, playReturn)
 			playThis = -1
 		}
