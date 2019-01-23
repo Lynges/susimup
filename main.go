@@ -4,12 +4,14 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/faiface/beep"
 	"github.com/faiface/beep/mp3"
 	"github.com/faiface/beep/speaker"
+	"github.com/gizak/termui"
 	ui "github.com/gizak/termui"
 )
 
@@ -37,7 +39,7 @@ func (sf *menuEntry) stopPlaying() {
 	sf.IsPlaying = false
 }
 
-func (sf *menuEntry) play(playControl <-chan string) {
+func (sf *menuEntry) play(playControl <-chan string, playReturn chan<- string) {
 
 	f, err := os.Open(sf.path + "/" + sf.File.Name())
 
@@ -48,10 +50,10 @@ func (sf *menuEntry) play(playControl <-chan string) {
 	stream, format, _ := mp3.Decode(f)
 
 	ctrl := &beep.Ctrl{Streamer: beep.Loop(-1, stream)}
+	ctrl.Paused = false
 
-	// Init the Speaker with the SampleRate of the format and a buffer size of 1/10s
 	speaker.Clear()
-	speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
+	speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10)) // speaker samplerate of second/10 is from example code.
 
 	// Internal channel, which will signal the end of the playback.
 	internalPlay := make(chan struct{})
@@ -65,32 +67,29 @@ func (sf *menuEntry) play(playControl <-chan string) {
 loop:
 	for {
 		select {
-		case <-internalPlay:
-			break loop
-			// internalPlay := make(chan struct{})
-
-			// speaker.Play(beep.Seq(ctrl, beep.Callback(func() {
-			// 	close(internalPlay)
-			// })))
-
 		case stm := <-playControl:
 			switch stm {
 			case "pause":
+				log.Print("pause for " + sf.File.Name())
 				speaker.Lock()
 				if ctrl.Paused {
 					ctrl.Paused = false
+					log.Print("paused = false")
 				} else {
-					log.Print(ctrl.Streamer.Err())
 					ctrl.Paused = true
+					log.Print("paused = true")
 				}
 				speaker.Unlock()
 			case "stop":
+				log.Print("stop for " + sf.File.Name())
 				break loop
 			}
-		case <-playControl:
+		case <-internalPlay:
+			log.Println("internalPlay has just been closedfor " + sf.File.Name())
 			break loop
 		}
 	}
+	playReturn <- "player_stopped"
 }
 
 func getFolderContent(path string) []menuEntry {
@@ -99,12 +98,26 @@ func getFolderContent(path string) []menuEntry {
 		log.Fatal(err)
 	}
 	files := []menuEntry{}
+	directories := []menuEntry{}
 	for _, rf := range rawfiles {
-		if !strings.HasPrefix(rf.Name(), ".") && (strings.HasSuffix(rf.Name(), ".mp3") || rf.IsDir()) {
-			files = append(files, menuEntry{rf, path, false})
+		if !strings.HasPrefix(rf.Name(), ".") {
+			switch {
+			case rf.IsDir():
+				directories = append(directories, menuEntry{rf, path, false})
+			case strings.HasSuffix(rf.Name(), ".mp3"):
+				files = append(files, menuEntry{rf, path, false})
+			}
 		}
 	}
-	return files
+	log.Println(directories)
+	sort.Slice(directories, func(i, j int) bool {
+		return strings.ToLower(directories[i].File.Name()) < strings.ToLower(directories[j].File.Name())
+	})
+	sort.Slice(files, func(i, j int) bool {
+		return strings.ToLower(files[i].File.Name()) < strings.ToLower(files[j].File.Name())
+	})
+
+	return append(directories, files...)
 }
 
 func updateList(ls *ui.List, entries []menuEntry, marker int) {
@@ -154,42 +167,30 @@ func getNextPlayable(direction int, entries []menuEntry) int {
 	return position
 }
 
+func channelCombiner(uichan <-chan termui.Event, playchan <-chan string, returnchan chan<- string) {
+	for {
+		select {
+		case event := <-uichan:
+			returnchan <- event.ID
+		case msg := <-playchan:
+			returnchan <- msg
+		}
+	}
+}
+
 func main() {
 	err := ui.Init()
 	if err != nil {
 		panic(err)
 	}
 	defer ui.Close()
-
-	file, err := os.OpenFile("info.log", os.O_CREATE|os.O_APPEND, 0644)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	defer file.Close()
-
-	log.SetOutput(file)
-
-	// strs := []string{
-	// 	"[0] github.com/gizak/termui",
-	// 	"[1] [你好，世界](fg-blue)",
-	// 	"[2] [こんにちは世界](fg-red)",
-	// 	"[3] [color output](fg-white,bg-green)",
-	// 	"[4] output.go",
-	// 	"[5] random_out.go",
-	// 	"[6] dashboard.go",
-	// 	"[7] nsf/termbox-go"}
-
+	// TODO: some better selection for musicdir
 	basepath := "testmusic"
 	path := []string{}
 	path = append(path, basepath)
 
 	sfiles := getFolderContent(basepath)
 
-	// start channel for player control
-	playControl := make(chan string)
-	playThis := -1
-	// configure ui
 	ls := ui.NewList()
 	ls.BorderLabel = strings.Join(path, "/")
 	ls.ItemFgColor = ui.ColorGreen
@@ -202,16 +203,23 @@ func main() {
 			ui.NewCol(10, 0, ls)),
 		//ui.NewCol(2, 0, widget1)),
 	)
-
-	// calculate layout
 	ui.Body.Align()
-
 	ui.Render(ls)
 
+	// start channel for player control
+	playControl := make(chan string)
+	// and the channel for player talkback
+	playReturn := make(chan string)
+	// and the channel for uievents
 	uiEvents := ui.PollEvents()
+	// and finally the mainchannel
+	coms := make(chan string)
+	go channelCombiner(uiEvents, playReturn, coms)
+
+	playThis := -1
 	for {
-		e := <-uiEvents
-		switch e.ID {
+		com := <-coms
+		switch com {
 		case "q", "<C-c>":
 			return
 		case "<Up>":
@@ -235,34 +243,27 @@ func main() {
 				barpos = 0
 			}
 		case "<Space>":
-			playControl <- "pause"
+			select {
+			case playControl <- "pause":
+			default:
+				// we do this to prevent blocking if space is pressed without a track is playing
+			}
+		case "player_stopped":
+			// empty here to we fall through and update the list to remove the playerbar
+
 		}
 		if playThis >= 0 {
-			playControl = make(chan string)
-			go sfiles[playThis].play(playControl)
+			select {
+			case playControl <- "stop":
+			default:
+				// we send a non-blocking stop to prevent any lingering goroutines from causing trouble.
+			}
+			go sfiles[playThis].play(playControl, playReturn)
 			playThis = -1
 		}
 		updateList(ls, sfiles, barpos)
-		// ls.BorderLabel = e.ID
 		ls.BorderLabel = strings.Join(path, "/")
 		ui.Clear()
 		ui.Render(ls)
 	}
 }
-
-/*
-List of events:
-	mouse events:
-		<MouseLeft> <MouseRight> <MouseMiddle>
-		<MouseWheelUp> <MouseWheelDown>
-	keyboard events:
-		any uppercase or lowercase letter or a set of two letters like j or jj or J or JJ
-		<C-d> etc
-		<M-d> etc
-		<Up> <Down> <Left> <Right>
-		<Insert> <Delete> <Home> <End> <Previous> <Next>
-		<Backspace> <Tab> <Enter> <Escape> <Space>
-		<C-<Space>> etc
-	terminal events:
-		<Resize>
-*/
