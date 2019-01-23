@@ -1,5 +1,8 @@
-# susimup
+# SUSIMUP
 An intentionally simplified music player.
+
+SUSIMUP was created to fill the need of a music player that you can let anyone operate under lees than ideal conditions while giving as few ways to make a mess of things.
+The original purpose was as a sound player during live performance where the operator either had very little training/experience using keyboard/screen or is situated where it is not possible to provide them with feedback on what the software is doing.
 
 ## Installation
 In the near future there will be precompiles executeables available for download, perhaps even appimage and similar. I will also be looking into bundling the dependency.

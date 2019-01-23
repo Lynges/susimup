@@ -53,7 +53,6 @@ func (sf *menuEntry) play(playControl <-chan string, playReturn chan<- string) {
 	}
 
 	loopcount := 1
-
 	if sf.shouldLoop {
 		loopcount = -1
 	}
