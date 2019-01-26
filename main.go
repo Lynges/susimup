@@ -79,23 +79,18 @@ loop:
 		case stm := <-playControl:
 			switch stm {
 			case "pause":
-				log.Print("pause for " + sf.File.Name())
 				speaker.Lock()
 				if ctrl.Paused {
 					ctrl.Paused = false
-					log.Print("paused = false")
 				} else {
 					ctrl.Paused = true
-					log.Print("paused = true")
 				}
 				speaker.Unlock()
 			case "stop":
 				speaker.Clear()
-				log.Print("stop for " + sf.File.Name())
 				break loop
 			}
 		case <-internalPlay:
-			log.Println("internalPlay has just been closedfor " + sf.File.Name())
 			break loop
 		}
 	}
@@ -136,14 +131,12 @@ func getFolderContent(path string) []menuEntry {
 }
 
 func updateList(ls *ui.List, entries []menuEntry, marker int) {
-	log.Println("updating list")
 	items := []string{}
 	for index := 0; index < len(entries); index++ {
 		representation := entries[index].represent()
 		if marker == index {
 			representation = "[" + representation + "]" + styleMarked
 		} else if entries[index].File.Name() == currentlyPlaying {
-			log.Println(representation)
 			representation = "[" + representation + "]" + stylePlaying
 		}
 		items = append(items, representation)
@@ -281,7 +274,6 @@ func main() {
 				// we do this to prevent blocking if space is pressed without a track is playing
 			}
 		case "player_stopped":
-			log.Println("received player_stopped")
 			// empty here to we fall out the bottom and update the list to remove the playerbar
 		}
 
