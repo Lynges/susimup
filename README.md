@@ -1,16 +1,29 @@
-# SUSIMUP
+# susimup
 An intentionally simplified music player.
 
-SUSIMUP was created to fill the need of a music player that you can let anyone operate under lees than ideal conditions while giving as few ways to make a mess of things.
-The original purpose was as a sound player during live performance where the operator either had very little training/experience using keyboard/screen or is situated where it is not possible to provide them with feedback on what the software is doing.
+susimup was created to fill the need of a music player that you can let anyone operate under less than ideal conditions while giving said operator as few ways to make a mess of things as possible.
+The original purpose is as a sound player during live performance where the operator either had very little training/experience using keyboard/screen or is situated where it is not possible to provide them with feedback on what the software is doing.
+As such it has some limitations that are actually features. 
+
+
+## (Non)Features
+* Uses a terminal interface and as a result does not require a desktop environment nor even a display server.
+* Only reads MP3 files
+* Does *not* read any file metadata (IDv2, IDv3, APEv2 and such). Only diplays the filename
+* Filenames are always listed alphabetically with subdirectories listed first
+* Will not play next track when current one ends. Silence is played instead.
+* If current filename ends in `_loop.mp3` the playback will loop indefinitely.
+* Takes only one command line argument: the directory to start in. If none is provided, the current directory is used
+* Can not access directories above the starting directory.
+* When entering a new subdirectory, playback stops.
 
 ## Installation
-In the near future there will be precompiles executeables available for download, perhaps even appimage and similar. I will also be looking into bundling the dependency.
+In the near future there will be precompiled executeables available for download, perhaps even an appimage for linux. I will also be looking into bundling the dependency.
 For now you must build the project yourself.
 
 ### Prerequsites
 
-This project depends on [beep](https://github.com/faiface/beep/) and in turn [oto](https://github.com/hajimehoshi/oto) that requires an alsa library.
+This project depends on [beep](https://github.com/faiface/beep/) and in turn [oto](https://github.com/hajimehoshi/oto) that requires an alsa library to work on linux.
 
 To install the lib on ubuntu do:
 ```
@@ -24,6 +37,8 @@ For other distros take a look at the list of package names here: http://rosindex
 ```
 go get github.com/Lynges/susimup
 cd $GOPATH/src/github.com/susimup
-go build main.go
+go build
 ```
 You can now run the resulting executeable.
+To tell susimup where to look for mp3 files, provide the path as an argument: `/path/to/susimup /path/to/soundfiles`
+Alternatively you can just move/copy susimup to the folder containing the soundfiles and then: `/path/to/soundfiles/susimup`
