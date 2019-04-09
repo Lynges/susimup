@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,16 +42,20 @@ func (sf *menuEntry) represent() string {
 }
 
 func (sf *menuEntry) stopPlaying() {
-	currentlyPlaying = ""
+	if currentlyPlaying == sf.File.Name() {
+		currentlyPlaying = ""
+	}
 }
 
 func (sf *menuEntry) play(playControl <-chan string, playReturn chan<- string) {
-	currentlyPlaying = sf.File.Name()
+	defer sf.stopPlaying()
 
 	f, err := os.Open(filepath.Join(sf.path, sf.File.Name()))
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	defer f.Close()
 
 	loopcount := 1
 	if sf.shouldLoop {
@@ -169,11 +174,22 @@ func getNextPlayable(direction int, entries []menuEntry) int {
 	if position == -1 {
 		direction = 1
 	}
-	for index := position + direction; index > -1 && index < len(entries); index = index + direction {
+
+	for index := position + direction; index >= -1 && index <= len(entries); index = index + direction {
+		if index == len(entries) {
+			// we know that we reached the end of the list without finding anything
+			return -2
+		}
+		if index == -1 {
+			// we know that we reach the beginning without finding anything
+			return -2
+		}
 		if !entries[index].File.IsDir() {
+			log.Println("out of " + strconv.Itoa(len(entries)) + " we have selected " + strconv.Itoa(index))
 			return index
 		}
 	}
+
 	return position
 }
 
@@ -276,7 +292,7 @@ func main() {
 		case "player_stopped":
 			// empty here to we fall out the bottom and update the list to remove the playerbar
 		}
-
+		log.Println("found " + strconv.Itoa(playThis) + " as position")
 		if playThis >= 0 || playThis == -2 {
 			select {
 			case playControl <- "stop":
@@ -285,9 +301,11 @@ func main() {
 			}
 		}
 		if playThis >= 0 {
+			currentlyPlaying = sfiles[playThis].File.Name()
 			go sfiles[playThis].play(playControl, playReturn)
 			playThis = -1
 		}
+
 		updateList(ls, sfiles, barpos)
 		ls.BorderLabel = strings.Join(pathelements, "/") + labelEnd
 		ui.Clear()
