@@ -17,6 +17,14 @@ As such it has some limitations that are actually features.
 * Can not access directories above the starting directory.
 * When entering a new subdirectory, playback stops.
 
+## Controls
+* **\<Up\>/\<Down\>**: Move selection bar up or down.
+* **\<Enter\>**: Select item under bar. Mp3 will be played, folder will be accessed.
+* **\<Backspace\>**: Go up one directory level unless already at starting directory
+* **j**: Play next number. If none have been playing, play first number in current folder.
+* **h**: Play previous number. If none have been playing, play first number in current folder.
+* **q**: Quit susimup.
+
 ## Installation
 In the near future there will be precompiled executeables available for download, perhaps even an appimage for linux. I will also be looking into bundling the dependency.
 For now you must build the project yourself.
@@ -40,5 +48,6 @@ cd $GOPATH/src/github.com/susimup
 go build
 ```
 You can now run the resulting executeable.
+
 To tell susimup where to look for mp3 files, provide the path as an argument: `/path/to/susimup /path/to/soundfiles`
 Alternatively you can just move/copy susimup to the folder containing the soundfiles and then: `/path/to/soundfiles/susimup`
