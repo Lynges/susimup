@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,11 +15,12 @@ import (
 	"github.com/faiface/beep/speaker"
 	"github.com/gizak/termui"
 	ui "github.com/gizak/termui"
+	"github.com/gizak/termui/widgets"
 )
 
-const styleMarked = "(fg-black,bg-green)"
-const stylePlaying = "(fg-white,bg-green)"
-const styleNormal = "(fg-green,bg-black)"
+const styleMarked = "(fg:black,bg:green)"
+const stylePlaying = "(fg:white,bg:green)"
+const styleNormal = "(fg:green,bg:black)"
 const labelEnd = "  -  Press backspace to go up a folder level"
 
 var currentlyPlaying string
@@ -29,6 +29,12 @@ type menuEntry struct {
 	File       os.FileInfo
 	path       string
 	shouldLoop bool
+}
+
+type message struct {
+	key     string
+	action  string
+	payload string
 }
 
 func (sf *menuEntry) represent() string {
@@ -41,14 +47,8 @@ func (sf *menuEntry) represent() string {
 	return prefix + sf.File.Name()
 }
 
-func (sf *menuEntry) stopPlaying() {
-	if currentlyPlaying == sf.File.Name() {
-		currentlyPlaying = ""
-	}
-}
-
-func (sf *menuEntry) play(playControl <-chan string, playReturn chan<- string) {
-	defer sf.stopPlaying()
+func (sf *menuEntry) play(playControl <-chan message, playReturn chan<- message) {
+	defer sendMessage(playReturn, message{"player_feedback", "player_stopped", sf.File.Name()})
 
 	f, err := os.Open(filepath.Join(sf.path, sf.File.Name()))
 	if err != nil {
@@ -82,24 +82,34 @@ loop:
 	for {
 		select {
 		case stm := <-playControl:
-			switch stm {
-			case "pause":
-				speaker.Lock()
-				if ctrl.Paused {
-					ctrl.Paused = false
-				} else {
-					ctrl.Paused = true
+			switch stm.key {
+			case "player_control":
+				if stm.payload == "all" || stm.payload == sf.File.Name() {
+					switch stm.action {
+					case "pause":
+						speaker.Lock()
+						if ctrl.Paused {
+							ctrl.Paused = false
+						} else {
+							ctrl.Paused = true
+						}
+						speaker.Unlock()
+					case "stop":
+						speaker.Clear()
+						break loop
+					}
 				}
-				speaker.Unlock()
-			case "stop":
-				speaker.Clear()
-				break loop
+
 			}
+
 		case <-internalPlay:
 			break loop
 		}
 	}
-	playReturn <- "player_stopped"
+}
+
+func sendMessage(send chan<- message, msg message) {
+	send <- msg
 }
 
 func getFolderContent(path string) []menuEntry {
@@ -135,20 +145,17 @@ func getFolderContent(path string) []menuEntry {
 	return append(directories, files...)
 }
 
-func updateList(ls *ui.List, entries []menuEntry, marker int) {
+func updateList(ls *widgets.List, entries []menuEntry, marker int) {
 	items := []string{}
 	for index := 0; index < len(entries); index++ {
 		representation := entries[index].represent()
-		if marker == index {
-			representation = "[" + representation + "]" + styleMarked
-		} else if entries[index].File.Name() == currentlyPlaying {
+		if entries[index].File.Name() == currentlyPlaying {
 			representation = "[" + representation + "]" + stylePlaying
 		}
 		items = append(items, representation)
 	}
-	ls.Items = items
-
-	ls.Height = len(ls.Items) + 2 // to make up for list including its own size in this number
+	ls.Rows = items
+	ls.SelectedRow = marker
 }
 
 func generatePosition(currentpos int, modifier int, listsize int) int {
@@ -185,7 +192,6 @@ func getNextPlayable(direction int, entries []menuEntry) int {
 			return -2
 		}
 		if !entries[index].File.IsDir() {
-			log.Println("out of " + strconv.Itoa(len(entries)) + " we have selected " + strconv.Itoa(index))
 			return index
 		}
 	}
@@ -200,6 +206,15 @@ func channelCombiner(uichan <-chan termui.Event, playchan <-chan string, returnc
 			returnchan <- event.ID
 		case msg := <-playchan:
 			returnchan <- msg
+		}
+	}
+}
+
+func eventChanneller(uichan <-chan termui.Event, receivechan chan<- message) {
+	for {
+		select {
+		case event := <-uichan:
+			receivechan <- message{"uievent", "key_pressed", event.ID}
 		}
 	}
 }
@@ -230,85 +245,99 @@ func main() {
 	}
 	defer ui.Close()
 
-	ls := ui.NewList()
-	ls.BorderLabel = strings.Join(pathelements, "/") + labelEnd
-	ls.ItemFgColor = ui.ColorGreen
+	ls := widgets.NewList()
+	ls.Title = strings.Join(pathelements, "/") + labelEnd
+	ls.TextStyle = ui.NewStyle(ui.ColorGreen)
+	ls.WrapText = false
+	ls.SelectedRowStyle = ui.NewStyle(ui.ColorBlack, ui.ColorGreen)
 	barpos := 0
 
 	updateList(ls, sfiles, barpos)
 
-	ui.Body.AddRows(
-		ui.NewRow(
-			ui.NewCol(10, 0, ls)),
-	)
-	ui.Body.Align()
-	ui.Render(ls)
+	// setup grid
+	grid := ui.NewGrid()
+	termWidth, termHeight := ui.TerminalDimensions()
+	grid.SetRect(0, 0, termWidth, termHeight)
 
-	// start channel for player control
-	playControl := make(chan string)
-	// and the channel for player talkback
-	playReturn := make(chan string)
+	grid.Set(
+		ui.NewRow(1.0,
+			ui.NewCol(1.0, ls),
+		),
+	)
+	// ui.Body.Align()
+	ui.Render(grid)
+
 	// and the channel for uievents
 	uiEvents := ui.PollEvents()
-	// and finally the mainchannel
-	coms := make(chan string)
-	go channelCombiner(uiEvents, playReturn, coms)
+
+	receive := make(chan message)
+	send := make(chan message)
+	go eventChanneller(uiEvents, receive)
 
 	playThis := -1 // -1 is "do nothing, but update" -2 is "stop playing" and 0+ is "play this track in the current folder"
 	for {
-		com := <-coms
-		switch com {
-		case "q", "<C-c>":
-			return
-		case "<Up>":
-			barpos = generatePosition(barpos, -1, len(ls.Items))
-		case "<Down>":
-			barpos = generatePosition(barpos, 1, len(ls.Items))
-		case "<Enter>":
-			if sfiles[barpos].File.IsDir() {
-				pathelements = append(pathelements, sfiles[barpos].File.Name())
-				sfiles = getFolderContent(filepath.Join(pathelements...))
-				barpos = 0
-				playThis = -2
-			} else {
-				playThis = barpos
+		com := <-receive
+		switch com.key {
+		case "uievent":
+			switch com.payload {
+			case "q", "<C-c>":
+				return
+			case "<Up>":
+				barpos = generatePosition(barpos, -1, len(ls.Rows))
+			case "<Down>":
+				barpos = generatePosition(barpos, 1, len(ls.Rows))
+			case "<Enter>":
+				if sfiles[barpos].File.IsDir() {
+					pathelements = append(pathelements, sfiles[barpos].File.Name())
+					sfiles = getFolderContent(filepath.Join(pathelements...))
+					barpos = 0
+					playThis = -2
+				} else {
+					playThis = barpos
+				}
+			case "h":
+				playThis = getNextPlayable(-1, sfiles)
+			case "j":
+				playThis = getNextPlayable(1, sfiles)
+			case "<Backspace>", "C-8>":
+				if len(pathelements) > 1 {
+					pathelements = pathelements[:len(pathelements)-1]
+					sfiles = getFolderContent(strings.Join(pathelements, "/"))
+					barpos = 0
+				}
+			case "<Space>":
+				select {
+				case send <- message{"player_control", "pause", "all"}:
+				default:
+					// we do this to prevent blocking if space is pressed without a track is playing
+				}
 			}
-		case "h":
-			playThis = getNextPlayable(-1, sfiles)
-		case "j":
-			playThis = getNextPlayable(1, sfiles)
-		case "<Backspace>", "C-8>":
-			if len(pathelements) > 1 {
-				pathelements = pathelements[:len(pathelements)-1]
-				sfiles = getFolderContent(strings.Join(pathelements, "/"))
-				barpos = 0
+		case "player_feedback":
+			switch com.action {
+			case "player_stopped":
+				if currentlyPlaying == com.payload {
+					currentlyPlaying = ""
+				}
+				// empty here to we fall out the bottom and update the list to remove the playerbar
 			}
-		case "<Space>":
-			select {
-			case playControl <- "pause":
-			default:
-				// we do this to prevent blocking if space is pressed without a track is playing
-			}
-		case "player_stopped":
-			// empty here to we fall out the bottom and update the list to remove the playerbar
 		}
-		log.Println("found " + strconv.Itoa(playThis) + " as position")
+
 		if playThis >= 0 || playThis == -2 {
 			select {
-			case playControl <- "stop":
+			case send <- message{"player_control", "stop", "all"}:
 			default:
 				// we send a non-blocking stop to prevent any lingering goroutines from causing trouble.
 			}
 		}
 		if playThis >= 0 {
 			currentlyPlaying = sfiles[playThis].File.Name()
-			go sfiles[playThis].play(playControl, playReturn)
+			go sfiles[playThis].play(send, receive)
 			playThis = -1
 		}
 
 		updateList(ls, sfiles, barpos)
-		ls.BorderLabel = strings.Join(pathelements, "/") + labelEnd
+		ls.Title = strings.Join(pathelements, "/") + labelEnd
 		ui.Clear()
-		ui.Render(ls)
+		ui.Render(grid)
 	}
 }
