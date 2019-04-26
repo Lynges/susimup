@@ -1,4 +1,4 @@
-package main
+package susimup
 
 import (
 	"fmt"
@@ -219,31 +219,15 @@ func eventChanneller(uichan <-chan termui.Event, receivechan chan<- message) {
 	}
 }
 
-func main() {
-	var basepath string
-	var err error
-	if len(os.Args) > 1 {
-		basepath, err = filepath.Abs(os.Args[1])
-		if err != nil {
-			log.Println(os.Args[1] + " caused: " + err.Error() + "\n Using cwd as basepath.")
-		}
-	} else {
-		basepath, err = os.Getwd()
-		if err != nil {
-			fmt.Println(err)
-			log.Fatal(err)
-		}
-	}
+// Start handles showing the music player and playing muisic.
+// basepath is expected to be a string of absolute path to the desired starting directory.
+// A termui instance expects to be set up already.
+func Start(basepath string) {
+
 	pathelements := []string{}
 	pathelements = append(pathelements, basepath)
 
 	sfiles := getFolderContent(basepath)
-
-	err = ui.Init()
-	if err != nil {
-		panic(err)
-	}
-	defer ui.Close()
 
 	ls := widgets.NewList()
 	ls.Title = strings.Join(pathelements, "/") + labelEnd
