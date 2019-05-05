@@ -21,7 +21,6 @@ import (
 const styleMarked = "(fg:black,bg:green)"
 const stylePlaying = "(fg:white,bg:green)"
 const styleNormal = "(fg:green,bg:black)"
-const labelEnd = "  -  Press backspace to go up a folder level"
 
 var currentlyPlaying string
 
@@ -155,7 +154,9 @@ func updateList(ls *widgets.List, entries []menuEntry, marker int) {
 		items = append(items, representation)
 	}
 	ls.Rows = items
-	ls.SelectedRow = marker
+	if len(items) > 0 {
+		ls.SelectedRow = marker
+	}
 }
 
 func generatePosition(currentpos int, modifier int, listsize int) int {
@@ -199,6 +200,15 @@ func getNextPlayable(direction int, entries []menuEntry) int {
 	return position
 }
 
+func createTitle(pathelements []string) string {
+	var title = []string{strings.Join(pathelements, "/")}
+	if len(pathelements) > 1 {
+		title = append(title, "Backspace goes up a folder level")
+	}
+	title = append(title, "Q quits the player")
+	return strings.Join(title, " - ")
+}
+
 func channelCombiner(uichan <-chan termui.Event, playchan <-chan string, returnchan chan<- string) {
 	for {
 		select {
@@ -219,18 +229,17 @@ func eventChanneller(uichan <-chan termui.Event, receivechan chan<- message) {
 	}
 }
 
-// Start handles showing the music player and playing muisic.
+// Start handles showing the music player and playing music.
 // basepath is expected to be a string of absolute path to the desired starting directory.
-// A termui instance expects to be set up already.
-func Start(basepath string) {
-
+// manageui tells susimup to init and close its own termui instance.
+func Start(basepath string, grid *ui.Grid) {
 	pathelements := []string{}
 	pathelements = append(pathelements, basepath)
 
 	sfiles := getFolderContent(basepath)
 
 	ls := widgets.NewList()
-	ls.Title = strings.Join(pathelements, "/") + labelEnd
+	ls.Title = createTitle(pathelements)
 	ls.TextStyle = ui.NewStyle(ui.ColorGreen)
 	ls.WrapText = false
 	ls.SelectedRowStyle = ui.NewStyle(ui.ColorBlack, ui.ColorGreen)
@@ -239,10 +248,6 @@ func Start(basepath string) {
 	updateList(ls, sfiles, barpos)
 
 	// setup grid
-	grid := ui.NewGrid()
-	termWidth, termHeight := ui.TerminalDimensions()
-	grid.SetRect(0, 0, termWidth, termHeight)
-
 	grid.Set(
 		ui.NewRow(1.0,
 			ui.NewCol(1.0, ls),
@@ -258,6 +263,8 @@ func Start(basepath string) {
 	send := make(chan message)
 	go eventChanneller(uiEvents, receive)
 
+	// status vars
+	quitPlayer := false
 	playThis := -1 // -1 is "do nothing, but update" -2 is "stop playing" and 0+ is "play this track in the current folder"
 	for {
 		com := <-receive
@@ -265,7 +272,8 @@ func Start(basepath string) {
 		case "uievent":
 			switch com.payload {
 			case "q", "<C-c>":
-				return
+				playThis = -2
+				quitPlayer = true
 			case "<Up>":
 				barpos = generatePosition(barpos, -1, len(ls.Rows))
 			case "<Down>":
@@ -320,8 +328,11 @@ func Start(basepath string) {
 		}
 
 		updateList(ls, sfiles, barpos)
-		ls.Title = strings.Join(pathelements, "/") + labelEnd
+		ls.Title = createTitle(pathelements)
 		ui.Clear()
+		if quitPlayer {
+			return
+		}
 		ui.Render(grid)
 	}
 }

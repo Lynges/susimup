@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"susimup"
+	"github.com/lynges/susimup"
 
 	ui "github.com/gizak/termui"
 )
@@ -19,6 +19,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer ui.Close()
 
 	if len(os.Args) > 1 {
 		basepath, err = filepath.Abs(os.Args[1])
@@ -32,6 +33,10 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	susimup.Start(basepath)
-	defer ui.Close()
+	grid := ui.NewGrid()
+	termWidth, termHeight := ui.TerminalDimensions()
+	grid.SetRect(0, 0, termWidth, termHeight)
+
+	susimup.Start(basepath, grid)
+
 }
