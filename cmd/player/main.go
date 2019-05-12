@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/lynges/susimup"
+	"github.com/Lynges/susimup"
 
 	ui "github.com/gizak/termui"
 )
